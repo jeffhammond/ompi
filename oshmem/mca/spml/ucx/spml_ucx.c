@@ -18,6 +18,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <limits.h>
 
 #include "oshmem_config.h"
 #include "opal/datatype/opal_convertor.h"
@@ -37,6 +38,7 @@
 #include "oshmem/mca/spml/base/spml_base_putreq.h"
 #include "oshmem/mca/atomic/atomic.h"
 #include "oshmem/mca/scoll/base/base.h"
+#include "oshmem/op/op.h"
 #include "oshmem/runtime/runtime.h"
 
 #include "oshmem/mca/spml/ucx/spml_ucx_component.h"
@@ -2242,7 +2244,7 @@ int mca_spml_ucx_team_split_strided(shmem_team_t parent_team, int start, int
 
     ucx_new_team->parent_team = (mca_spml_ucx_team_t*)parent_team;
     ucx_new_team->slot = slot;
-    ucx_new_team->pSync = mca_scoll_team_sync_pool + slot * SHMEM_BARRIER_SYNC_SIZE;
+    ucx_new_team->pSync = mca_scoll_team_sync_pool + slot * MCA_SCOLL_TEAM_PSYNC_LEN;
     *(volatile unsigned long *)mca_scoll_team_slot_map |= 1UL << slot;
 
     /* the group is cached by oshmem_proc_group_create(), arbitrary strides
@@ -2458,30 +2460,275 @@ int mca_spml_ucx_team_alltoalls(shmem_team_t team, void
     return OSHMEM_ERR_NOT_IMPLEMENTED;
 }
 
-/* This routine is not implemented */
+/* Size in bytes of the elements of a SHMEM_<type> datatype code */
+static size_t mca_spml_ucx_datatype_size(int datatype)
+{
+    switch (datatype) {
+    case SHMEM_BYTE:
+    case SHMEM_CHAR:
+    case SHMEM_UCHAR:
+    case SHMEM_SCHAR:
+    case SHMEM_INT8_T:
+    case SHMEM_UINT8_T:
+        return 1;
+    case SHMEM_SHORT:
+    case SHMEM_USHORT:
+    case SHMEM_INT16_T:
+    case SHMEM_UINT16_T:
+        return 2;
+    case SHMEM_INT:
+    case SHMEM_UINT:
+    case SHMEM_INT32_T:
+    case SHMEM_UINT32_T:
+    case SHMEM_FLOAT:
+        return 4;
+    case SHMEM_INT64_T:
+    case SHMEM_UINT64_T:
+    case SHMEM_DOUBLE:
+        return 8;
+    case SHMEM_LONG:
+    case SHMEM_ULONG:
+        return sizeof(long);
+    case SHMEM_LLONG:
+    case SHMEM_ULLONG:
+        return sizeof(long long);
+    case SHMEM_SIZE_T:
+        return sizeof(size_t);
+    case SHMEM_PTRDIFF_T:
+        return sizeof(ptrdiff_t);
+    case SHMEM_LDOUBLE:
+        return sizeof(long double);
+    default:
+        return 0;
+    }
+}
+
+/* Reduction operations are defined for the fixed-width integer types, the C
+ * integer types are mapped to them by size and signedness. */
+#define SPML_UCX_SELECT_INT_OP(_op, _type)              \
+    switch (_op) {                                      \
+    case OSHMEM_OP_AND:  return oshmem_op_and_##_type;  \
+    case OSHMEM_OP_OR:   return oshmem_op_or_##_type;   \
+    case OSHMEM_OP_XOR:  return oshmem_op_xor_##_type;  \
+    case OSHMEM_OP_MAX:  return oshmem_op_max_##_type;  \
+    case OSHMEM_OP_MIN:  return oshmem_op_min_##_type;  \
+    case OSHMEM_OP_SUM:  return oshmem_op_sum_##_type;  \
+    case OSHMEM_OP_PROD: return oshmem_op_prod_##_type; \
+    default:             return NULL;                   \
+    }
+
+#define SPML_UCX_SELECT_FP_OP(_op, _type)               \
+    switch (_op) {                                      \
+    case OSHMEM_OP_MAX:  return oshmem_op_max_##_type;  \
+    case OSHMEM_OP_MIN:  return oshmem_op_min_##_type;  \
+    case OSHMEM_OP_SUM:  return oshmem_op_sum_##_type;  \
+    case OSHMEM_OP_PROD: return oshmem_op_prod_##_type; \
+    default:             return NULL;                   \
+    }
+
+#define SPML_UCX_SELECT_COMPLEX_OP(_op, _type)          \
+    switch (_op) {                                      \
+    case OSHMEM_OP_SUM:  return oshmem_op_sum_##_type;  \
+    case OSHMEM_OP_PROD: return oshmem_op_prod_##_type; \
+    default:             return NULL;                   \
+    }
+
+static oshmem_op_t *mca_spml_ucx_select_signed_op(int op, size_t size)
+{
+    switch (size) {
+    case 1: SPML_UCX_SELECT_INT_OP(op, int8)
+    case 2: SPML_UCX_SELECT_INT_OP(op, int16)
+    case 4: SPML_UCX_SELECT_INT_OP(op, int32)
+    case 8: SPML_UCX_SELECT_INT_OP(op, int64)
+    default: return NULL;
+    }
+}
+
+static oshmem_op_t *mca_spml_ucx_select_unsigned_op(int op, size_t size)
+{
+    switch (size) {
+    case 1: SPML_UCX_SELECT_INT_OP(op, uint8)
+    case 2: SPML_UCX_SELECT_INT_OP(op, uint16)
+    case 4: SPML_UCX_SELECT_INT_OP(op, uint32)
+    case 8: SPML_UCX_SELECT_INT_OP(op, uint64)
+    default: return NULL;
+    }
+}
+
+/* Returns the reduction operation object for an operation (OSHMEM_OP_*) and
+ * datatype (SHMEM_*) pair, or NULL if the combination is not defined. */
+static oshmem_op_t *mca_spml_ucx_team_get_op(int op, int datatype)
+{
+    size_t size = mca_spml_ucx_datatype_size(datatype);
+
+    switch (datatype) {
+    case SHMEM_CHAR:
+        return (CHAR_MIN < 0) ? mca_spml_ucx_select_signed_op(op, size) :
+                                mca_spml_ucx_select_unsigned_op(op, size);
+    case SHMEM_SCHAR:
+    case SHMEM_SHORT:
+    case SHMEM_INT:
+    case SHMEM_LONG:
+    case SHMEM_LLONG:
+    case SHMEM_INT8_T:
+    case SHMEM_INT16_T:
+    case SHMEM_INT32_T:
+    case SHMEM_INT64_T:
+    case SHMEM_PTRDIFF_T:
+        return mca_spml_ucx_select_signed_op(op, size);
+    case SHMEM_UCHAR:
+    case SHMEM_USHORT:
+    case SHMEM_UINT:
+    case SHMEM_ULONG:
+    case SHMEM_ULLONG:
+    case SHMEM_UINT8_T:
+    case SHMEM_UINT16_T:
+    case SHMEM_UINT32_T:
+    case SHMEM_UINT64_T:
+    case SHMEM_SIZE_T:
+        return mca_spml_ucx_select_unsigned_op(op, size);
+    case SHMEM_FLOAT:
+        SPML_UCX_SELECT_FP_OP(op, float)
+    case SHMEM_DOUBLE:
+        SPML_UCX_SELECT_FP_OP(op, double)
+    case SHMEM_LDOUBLE:
+        SPML_UCX_SELECT_FP_OP(op, longdouble)
+    case SHMEM_COMPLEXF:
+        SPML_UCX_SELECT_COMPLEX_OP(op, complexf)
+    case SHMEM_COMPLEXD:
+        SPML_UCX_SELECT_COMPLEX_OP(op, complexd)
+    default:
+        return NULL;
+    }
+}
+
+/* Gets the group and the pSync to use for the next collective of a team. The
+ * sets 1 and 2 of the pSync of the team are used alternately, all the members
+ * call the collectives in the same order so they agree on the set. */
+static int mca_spml_ucx_team_get_scoll(shmem_team_t team, oshmem_group_t **group,
+                                       long **pSync, const char *func)
+{
+    static int world_coll_set = 0;
+    int *coll_set;
+
+    *group = mca_spml_ucx_team_get_group(team);
+    *pSync = mca_spml_ucx_team_get_psync(team);
+    if (OPAL_UNLIKELY((NULL == *group) || (NULL == *pSync))) {
+        SPML_UCX_ERROR("Team has no group or pSync at %s", func);
+        return OSHMEM_ERROR;
+    }
+
+    coll_set = (team == SHMEM_TEAM_WORLD) ? &world_coll_set :
+                                            &((mca_spml_ucx_team_t *)team)->coll_set;
+    *coll_set = (*coll_set % (MCA_SCOLL_TEAM_SYNC_SETS - 1)) + 1;
+    *pSync += *coll_set * MCA_SCOLL_TEAM_SYNC_SIZE;
+
+    return OSHMEM_SUCCESS;
+}
+
 int mca_spml_ucx_team_broadcast(shmem_team_t team, void
         *dest, const void *source, size_t nelems, int PE_root, int datatype)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    oshmem_group_t *group;
+    long *pSync;
+    size_t size;
+    int rc;
+
+    SPML_UCX_VALIDATE_TEAM(team);
+
+    rc = mca_spml_ucx_team_get_scoll(team, &group, &pSync, __func__);
+    if (OPAL_UNLIKELY(OSHMEM_SUCCESS != rc)) {
+        return rc;
+    }
+
+    size = nelems * mca_spml_ucx_datatype_size(datatype);
+    if (OPAL_UNLIKELY(0 == size)) {
+        return OSHMEM_SUCCESS;
+    }
+
+    if (OPAL_UNLIKELY((PE_root < 0) || (PE_root >= group->proc_count))) {
+        SPML_UCX_ERROR("Invalid root %d in a team of %d PEs at %s", PE_root,
+                       group->proc_count, __func__);
+        return OSHMEM_ERR_BAD_PARAM;
+    }
+
+    /* PE_root is relative to the team, the scoll takes the global PE. */
+    PE_root = oshmem_proc_pe_vpid(group, PE_root);
+
+    /* Unlike the active-set shmem_broadcast, the team version also updates
+     * dest on the root. */
+    if ((group->my_pe == PE_root) && (dest != source)) {
+        memmove(dest, source, size);
+    }
+
+    return group->g_scoll.scoll_broadcast(group, PE_root, dest, source, size,
+                                          pSync, true, SCOLL_DEFAULT_ALG);
 }
 
-/* This routine is not implemented */
 int mca_spml_ucx_team_collect(shmem_team_t team, void
         *dest, const void *source, size_t nelems, int datatype)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    oshmem_group_t *group;
+    long *pSync;
+    int rc;
+
+    SPML_UCX_VALIDATE_TEAM(team);
+
+    rc = mca_spml_ucx_team_get_scoll(team, &group, &pSync, __func__);
+    if (OPAL_UNLIKELY(OSHMEM_SUCCESS != rc)) {
+        return rc;
+    }
+
+    /* the number of elements may differ between the PEs */
+    return group->g_scoll.scoll_collect(group, dest, source,
+                                        nelems * mca_spml_ucx_datatype_size(datatype),
+                                        pSync, false, SCOLL_DEFAULT_ALG);
 }
 
-/* This routine is not implemented */
 int mca_spml_ucx_team_fcollect(shmem_team_t team, void
         *dest, const void *source, size_t nelems, int datatype)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    oshmem_group_t *group;
+    long *pSync;
+    int rc;
+
+    SPML_UCX_VALIDATE_TEAM(team);
+
+    rc = mca_spml_ucx_team_get_scoll(team, &group, &pSync, __func__);
+    if (OPAL_UNLIKELY(OSHMEM_SUCCESS != rc)) {
+        return rc;
+    }
+
+    /* the number of elements is the same on all PEs */
+    return group->g_scoll.scoll_collect(group, dest, source,
+                                        nelems * mca_spml_ucx_datatype_size(datatype),
+                                        pSync, true, SCOLL_DEFAULT_ALG);
 }
 
-/* This routine is not implemented */
 int mca_spml_ucx_team_reduce(shmem_team_t team, void
         *dest, const void *source, size_t nreduce, int operation, int datatype)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    oshmem_group_t *group;
+    oshmem_op_t *op;
+    long *pSync;
+    int rc;
+
+    SPML_UCX_VALIDATE_TEAM(team);
+
+    rc = mca_spml_ucx_team_get_scoll(team, &group, &pSync, __func__);
+    if (OPAL_UNLIKELY(OSHMEM_SUCCESS != rc)) {
+        return rc;
+    }
+
+    op = mca_spml_ucx_team_get_op(operation, datatype);
+    if (OPAL_UNLIKELY(NULL == op)) {
+        SPML_UCX_ERROR("Unsupported reduction operation %d on datatype %d at %s",
+                       operation, datatype, __func__);
+        return OSHMEM_ERR_BAD_PARAM;
+    }
+
+    /* the scoll takes the size in bytes, and no pWrk is needed */
+    return group->g_scoll.scoll_reduce(group, op, dest, source,
+                                       nreduce * op->dt_size, pSync, NULL,
+                                       SCOLL_DEFAULT_ALG);
 }
