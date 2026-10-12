@@ -246,7 +246,7 @@ OSHMEM_DECLSPEC int shmem_team_create_ctx(shmem_team_t team, long options, shmem
  */
 
 /* Teams sync */
-OSHMEM_DECLSPEC  void shmem_team_sync(shmem_team_t team);
+OSHMEM_DECLSPEC  int shmem_team_sync(shmem_team_t team);
 
 /* Teams alltoall */
 OSHMEM_DECLSPEC  int shmem_char_alltoall(shmem_team_t team, char *target, const char *source, size_t nelems);

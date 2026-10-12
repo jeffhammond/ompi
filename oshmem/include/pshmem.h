@@ -91,7 +91,7 @@ OSHMEM_DECLSPEC int pshmem_team_create_ctx(shmem_team_t team, long options, shme
  */
 
 /* Teams sync */
-OSHMEM_DECLSPEC  void pshmem_team_sync(shmem_team_t team);
+OSHMEM_DECLSPEC  int pshmem_team_sync(shmem_team_t team);
 
 
 /* Teams alltoall */

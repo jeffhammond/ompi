@@ -37,6 +37,8 @@
  * variables
  */
 long* mca_scoll_sync_array = NULL;
+long* mca_scoll_team_sync_pool = NULL;
+unsigned long* mca_scoll_team_slot_map = NULL;
 
 /*
  * Ensure all function pointers are NULL'ed out to start with
@@ -73,6 +75,28 @@ int mca_scoll_enable(void)
         }
     }
 
+    if (!mca_scoll_team_sync_pool) {
+        void* ptr = NULL;
+        int i = 0;
+        size_t n = MCA_SCOLL_TEAM_SYNC_SLOTS * _SHMEM_BARRIER_SYNC_SIZE;
+
+        ret = MCA_MEMHEAP_CALL(private_alloc(n * sizeof(*mca_scoll_team_sync_pool), &ptr));
+        if (OSHMEM_SUCCESS != ret) {
+            return ret;
+        }
+        mca_scoll_team_sync_pool = ptr;
+        for (i = 0; i < (int) n; i++) {
+            mca_scoll_team_sync_pool[i] = _SHMEM_SYNC_VALUE;
+        }
+
+        ret = MCA_MEMHEAP_CALL(private_alloc(sizeof(*mca_scoll_team_slot_map), &ptr));
+        if (OSHMEM_SUCCESS != ret) {
+            return ret;
+        }
+        mca_scoll_team_slot_map = ptr;
+        *mca_scoll_team_slot_map = 0;
+    }
+
     OPAL_TIMING_ENV_NEXT(mca_scoll_enable, "memheap");
 
     /* Note: it is done to support FCA only and we need to consider possibility to
@@ -106,6 +130,20 @@ static int mca_scoll_base_close(void)
 
         MCA_MEMHEAP_CALL(private_free(ptr));
         mca_scoll_sync_array = NULL;
+    }
+
+    if (mca_scoll_team_sync_pool) {
+        void* ptr = (void*) mca_scoll_team_sync_pool;
+
+        MCA_MEMHEAP_CALL(private_free(ptr));
+        mca_scoll_team_sync_pool = NULL;
+    }
+
+    if (mca_scoll_team_slot_map) {
+        void* ptr = (void*) mca_scoll_team_slot_map;
+
+        MCA_MEMHEAP_CALL(private_free(ptr));
+        mca_scoll_team_slot_map = NULL;
     }
 
     return mca_base_framework_components_close(&oshmem_scoll_base_framework, NULL);

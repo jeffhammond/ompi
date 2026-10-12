@@ -782,6 +782,17 @@ typedef int (*mca_spml_base_module_team_destroy_fn_t)(shmem_team_t team);
  *  @return                OSHMEM_SUCCESS or failure status.
  *
  */
+/**
+ * Create the predefined team SHMEM_TEAM_SHARED (the PEs of the calling PE's
+ * node) at initialization, after the scoll framework is enabled.
+ */
+typedef int (*mca_spml_base_module_team_init_shared_fn_t)(shmem_team_t *team);
+
+/**
+ * Release the predefined team created by team_init_shared at finalize.
+ */
+typedef void (*mca_spml_base_module_team_fini_shared_fn_t)(shmem_team_t *team);
+
 typedef int (*mca_spml_base_module_team_get_fn_t)(shmem_ctx_t ctx, shmem_team_t *team);
 
 /*
@@ -1069,6 +1080,8 @@ struct mca_spml_base_module_1_0_0_t {
     mca_spml_base_module_team_split_strided_fn_t     spml_team_split_strided;
     mca_spml_base_module_team_split_2d_fn_t          spml_team_split_2d;
     mca_spml_base_module_team_destroy_fn_t           spml_team_destroy;
+    mca_spml_base_module_team_init_shared_fn_t       spml_team_init_shared;
+    mca_spml_base_module_team_fini_shared_fn_t       spml_team_fini_shared;
     mca_spml_base_module_team_get_fn_t               spml_team_get;
     mca_spml_base_module_team_create_ctx_fn_t        spml_team_create_ctx;
 
