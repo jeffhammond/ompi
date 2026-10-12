@@ -32,6 +32,14 @@ BEGIN_C_DECLS
  */
 OSHMEM_DECLSPEC extern long* mca_scoll_sync_array;
 
+/* Pool of pSync arrays for the barrier of user created teams. Slot i is
+ * mca_scoll_team_sync_pool + i * _SHMEM_BARRIER_SYNC_SIZE. The pool and the
+ * bitmap of the slots in use by this PE are allocated symmetrically at init,
+ * so teams (which are created by a subset of the PEs) need no allocation. */
+#define MCA_SCOLL_TEAM_SYNC_SLOTS ((int) (sizeof(unsigned long) * 8))
+OSHMEM_DECLSPEC extern long* mca_scoll_team_sync_pool;
+OSHMEM_DECLSPEC extern unsigned long* mca_scoll_team_slot_map;
+
 OSHMEM_DECLSPEC int mca_scoll_base_find_available(bool enable_progress_threads,
                                                   bool enable_threads);
 

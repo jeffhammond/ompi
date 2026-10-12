@@ -106,6 +106,8 @@ static int _shmem_finalize(void)
         return ret;
     }
 
+    MCA_SPML_CALL(team_fini_shared(&oshmem_team_shared));
+
     oshmem_proc_group_finalize_scoll();
 
     /* Close down MCA modules */

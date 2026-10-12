@@ -137,6 +137,9 @@ typedef struct mca_spml_ucx_team {
     int                         start;
     mca_spml_ucx_team_config_t  *config;
     struct mca_spml_ucx_team    *parent_team;
+    oshmem_group_t              *group;   /* group of the member PEs, used by scoll */
+    long                        *pSync;   /* symmetric work array for scoll operations */
+    int                         slot;     /* index of pSync in mca_scoll_team_sync_pool */
 } mca_spml_ucx_team_t;
 
 struct mca_spml_ucx {
@@ -288,6 +291,13 @@ extern size_t mca_spml_ucx_test_any_vector(void *ivars, int cmp, void *cmp_value
 extern size_t mca_spml_ucx_test_some_vector(void *ivars, int cmp, void *cmp_values, size_t nelems,
                                             size_t *indices, const int *status, int datatype);
 extern int mca_spml_ucx_team_sync(shmem_team_t team);
+/* Accessors for scoll based team operations (sync, reduce, broadcast, ...).
+ * Both are valid for SHMEM_TEAM_WORLD and for any team the calling PE is a
+ * member of, and return NULL for SHMEM_TEAM_INVALID. */
+extern oshmem_group_t *mca_spml_ucx_team_get_group(shmem_team_t team);
+extern long *mca_spml_ucx_team_get_psync(shmem_team_t team);
+extern int mca_spml_ucx_team_init_shared(shmem_team_t *team);
+extern void mca_spml_ucx_team_fini_shared(shmem_team_t *team);
 extern int mca_spml_ucx_team_my_pe(shmem_team_t team);
 extern int mca_spml_ucx_team_n_pes(shmem_team_t team);
 extern int mca_spml_ucx_team_get_config(shmem_team_t team, long config_mask,

@@ -38,7 +38,7 @@
 #include "oshmem/shmem/c/profile-defines.h"
 #endif
 
-void shmem_team_sync(shmem_team_t team)
+int shmem_team_sync(shmem_team_t team)
 {
     int rc = 0;
 
@@ -47,7 +47,7 @@ void shmem_team_sync(shmem_team_t team)
     rc = MCA_SPML_CALL(team_sync(team));
     RUNTIME_CHECK_IMPL_RC(rc);
 
-    return ;
+    return rc;
 }
 
 int shmem_team_my_pe(shmem_team_t team)
@@ -63,8 +63,8 @@ int shmem_team_n_pes(shmem_team_t team)
 
     RUNTIME_CHECK_INIT();
 
+    /* -1 is a valid result, it is returned for SHMEM_TEAM_INVALID */
     rc = MCA_SPML_CALL(team_n_pes(team));
-    RUNTIME_CHECK_IMPL_RC(rc);
 
     return rc;
 }
@@ -96,7 +96,6 @@ int shmem_team_split_strided (shmem_team_t parent_team, int start, int stride,
 
     rc = MCA_SPML_CALL(team_split_strided(parent_team, start, stride, size,
                 config, config_mask, new_team));
-    RUNTIME_CHECK_RC(rc);
 
     return rc;
 }
@@ -112,7 +111,6 @@ int shmem_team_split_2d (shmem_team_t parent_team, int xrange, const
 
     rc = MCA_SPML_CALL(team_split_2d(parent_team, xrange, xaxis_config,
                 xaxis_mask, xaxis_team, yaxis_config, yaxis_mask, yaxis_team));
-    RUNTIME_CHECK_RC(rc);
 
     return rc;
 }
