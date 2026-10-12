@@ -112,6 +112,7 @@ struct mca_spml_ucx_ctx {
     bool                      synchronized_quiet;
     int                       strong_sync;
     mca_spml_ucx_rkey_store_t rkey_store;
+    shmem_team_t              team; /* NULL means SHMEM_TEAM_WORLD */
 };
 typedef struct mca_spml_ucx_ctx mca_spml_ucx_ctx_t;
 
@@ -142,6 +143,22 @@ typedef struct mca_spml_ucx_team {
     int                         slot;     /* index of pSync in mca_scoll_team_sync_pool */
     int                         coll_set; /* pSync set used by the last collective */
 } mca_spml_ucx_team_t;
+
+/**
+ * Translate a PE number given relative to the team of ctx into a world PE
+ * number. Contexts that belong to SHMEM_TEAM_WORLD (team == NULL) use world
+ * PE numbers directly.
+ */
+static inline int mca_spml_ucx_ctx_world_pe(shmem_ctx_t ctx, int pe)
+{
+    mca_spml_ucx_team_t *team = (mca_spml_ucx_team_t *)((mca_spml_ucx_ctx_t *)ctx)->team;
+
+    if (OPAL_LIKELY(NULL == team)) {
+        return pe;
+    }
+
+    return team->start + pe * team->stride;
+}
 
 struct mca_spml_ucx {
     mca_spml_base_module_t   super;

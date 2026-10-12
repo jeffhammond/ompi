@@ -1047,6 +1047,7 @@ static int mca_spml_ucx_ctx_create_common(long options, mca_spml_ucx_ctx_t **ucx
 
     ucx_ctx = malloc(sizeof(mca_spml_ucx_ctx_t));
     ucx_ctx->options = options;
+    ucx_ctx->team = NULL;
     ucx_ctx->ucp_worker = calloc(1, sizeof(ucp_worker_h));
     ucx_ctx->ucp_workers = 1;
     ucx_ctx->synchronized_quiet = mca_spml_ucx_ctx_default.synchronized_quiet;
@@ -1170,12 +1171,20 @@ int mca_spml_ucx_ctx_create(long options, shmem_ctx_t *ctx)
         SHMEM_MUTEX_UNLOCK(mca_spml_ucx.internal_mutex);
     }
 
+    /* A reused idle context may still refer to its previous team */
+    ucx_ctx->team = NULL;
+
     (*ctx) = (shmem_ctx_t)ucx_ctx;
     return OSHMEM_SUCCESS;
 }
 
 void mca_spml_ucx_ctx_destroy(shmem_ctx_t ctx)
 {
+    /* destroying SHMEM_CTX_INVALID is defined as a no-op */
+    if (SHMEM_CTX_INVALID == ctx) {
+        return;
+    }
+
     MCA_SPML_CALL(quiet(ctx));
 
     SHMEM_MUTEX_LOCK(mca_spml_ucx.internal_mutex);
@@ -1189,13 +1198,14 @@ void mca_spml_ucx_ctx_destroy(shmem_ctx_t ctx)
     SHMEM_MUTEX_UNLOCK(mca_spml_ucx.internal_mutex);
 }
 
-int mca_spml_ucx_get(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_addr, int src)
+int mca_spml_ucx_get(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_addr, int team_src)
 {
     /* A zero-length transfer is a no-op; the address need not be mapped. */
     if (OPAL_UNLIKELY(0 == size)) {
         return OSHMEM_SUCCESS;
     }
 
+    int src = mca_spml_ucx_ctx_world_pe(ctx, team_src);
     void *rva = NULL;
     spml_ucx_mkey_t *ucx_mkey = mca_spml_ucx_ctx_mkey_by_va(ctx, src, src_addr, &rva, &mca_spml_ucx);
     assert(NULL != ucx_mkey);
@@ -1221,12 +1231,13 @@ int mca_spml_ucx_get(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_add
 #endif
 }
 
-int mca_spml_ucx_get_nb(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_addr, int src, void **handle)
+int mca_spml_ucx_get_nb(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_addr, int team_src, void **handle)
 {
     if (OPAL_UNLIKELY(0 == size)) {
         return OSHMEM_SUCCESS;
     }
 
+    int src = mca_spml_ucx_ctx_world_pe(ctx, team_src);
     void *rva = NULL;
     ucs_status_t status;
     spml_ucx_mkey_t *ucx_mkey = mca_spml_ucx_ctx_mkey_by_va(ctx, src, src_addr, &rva, &mca_spml_ucx);
@@ -1252,8 +1263,9 @@ int mca_spml_ucx_get_nb(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_
     return ucx_status_to_oshmem_nb(status);
 }
 
-int mca_spml_ucx_get_nb_wprogress(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_addr, int src, void **handle)
+int mca_spml_ucx_get_nb_wprogress(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_addr, int team_src, void **handle)
 {
+    int src = mca_spml_ucx_ctx_world_pe(ctx, team_src);
     unsigned int i;
     if (OPAL_UNLIKELY(0 == size)) {
         return OSHMEM_SUCCESS;
@@ -1295,13 +1307,14 @@ int mca_spml_ucx_get_nb_wprogress(shmem_ctx_t ctx, void *src_addr, size_t size, 
     return ucx_status_to_oshmem_nb(status);
 }
 
-int mca_spml_ucx_put(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_addr, int dst)
+int mca_spml_ucx_put(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_addr, int team_dst)
 {
     /* A zero-length transfer is a no-op; the address need not be mapped. */
     if (OPAL_UNLIKELY(0 == size)) {
         return OSHMEM_SUCCESS;
     }
 
+    int dst = mca_spml_ucx_ctx_world_pe(ctx, team_dst);
     void *rva = NULL;
     spml_ucx_mkey_t *ucx_mkey = mca_spml_ucx_ctx_mkey_by_va(ctx, dst, dst_addr, &rva, &mca_spml_ucx);
     assert(NULL != ucx_mkey);
@@ -1334,12 +1347,13 @@ int mca_spml_ucx_put(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_add
     return res;
 }
 
-int mca_spml_ucx_put_nb(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_addr, int dst, void **handle)
+int mca_spml_ucx_put_nb(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_addr, int team_dst, void **handle)
 {
     if (OPAL_UNLIKELY(0 == size)) {
         return OSHMEM_SUCCESS;
     }
 
+    int dst = mca_spml_ucx_ctx_world_pe(ctx, team_dst);
     void *rva = NULL;
     spml_ucx_mkey_t *ucx_mkey = mca_spml_ucx_ctx_mkey_by_va(ctx, dst, dst_addr, &rva, &mca_spml_ucx);
     assert(NULL != ucx_mkey);
@@ -1370,8 +1384,9 @@ int mca_spml_ucx_put_nb(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_
     return ucx_status_to_oshmem_nb(status);
 }
 
-int mca_spml_ucx_put_nb_wprogress(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_addr, int dst, void **handle)
+int mca_spml_ucx_put_nb_wprogress(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_addr, int team_dst, void **handle)
 {
+    int dst = mca_spml_ucx_ctx_world_pe(ctx, team_dst);
     unsigned int i;
     if (OPAL_UNLIKELY(0 == size)) {
         return OSHMEM_SUCCESS;
@@ -1481,6 +1496,11 @@ int mca_spml_ucx_fence(shmem_ctx_t ctx)
     int ret;
     unsigned int i = 0;
 
+    if (OPAL_UNLIKELY(SHMEM_CTX_INVALID == ctx)) {
+        SPML_UCX_ERROR("Invalid context at %s", __func__);
+        return OSHMEM_ERROR;
+    }
+
     opal_atomic_wmb();
 
     if (ucx_ctx->strong_sync != SPML_UCX_STRONG_ORDERING_NONE) {
@@ -1509,6 +1529,11 @@ int mca_spml_ucx_quiet(shmem_ctx_t ctx)
     int ret;
     unsigned i;
     mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
+
+    if (OPAL_UNLIKELY(SHMEM_CTX_INVALID == ctx)) {
+        SPML_UCX_ERROR("Invalid context at %s", __func__);
+        return OSHMEM_ERROR;
+    }
 
     if (ucx_ctx->synchronized_quiet) {
         ret = mca_spml_ucx_strong_sync(ctx);
@@ -2089,11 +2114,23 @@ int mca_spml_ucx_team_get_config(shmem_team_t team, long config_mask,
         shmem_team_config_t *config)
 {
     mca_spml_ucx_team_t *ucx_team = (mca_spml_ucx_team_t *)team;
-    SPML_UCX_VALIDATE_TEAM(team);
 
-    memcpy(config, &ucx_team->config, sizeof(shmem_team_config_t));
+    if (OPAL_UNLIKELY(SHMEM_TEAM_INVALID == team)) {
+        return OSHMEM_ERROR;
+    }
 
-    return SHMEM_SUCCESS;
+    if ((0 == config_mask) || (NULL == config)) {
+        return OSHMEM_SUCCESS;
+    }
+
+    if (config_mask & SHMEM_TEAM_NUM_CONTEXTS) {
+        /* SHMEM_TEAM_WORLD has no stored configuration, and the number of
+         * contexts is not limited by this implementation */
+        config->num_contexts = (SHMEM_TEAM_WORLD == team) ? 0 :
+                               ucx_team->config->super.num_contexts;
+    }
+
+    return OSHMEM_SUCCESS;
 }
 
 static inline int mca_spml_ucx_is_pe_in_strided_team(int src_pe, int start,
@@ -2238,8 +2275,8 @@ int mca_spml_ucx_team_split_strided(shmem_team_t parent_team, int start, int
         return OSHMEM_ERR_OUT_OF_RESOURCE;
     }
 
-    if (config != NULL) {
-        memcpy(&ucx_new_team->config->super, config, sizeof(shmem_team_config_t));
+    if ((config != NULL) && (config_mask & SHMEM_TEAM_NUM_CONTEXTS)) {
+        ucx_new_team->config->super.num_contexts = config->num_contexts;
     }
 
     ucx_new_team->parent_team = (mca_spml_ucx_team_t*)parent_team;
@@ -2433,57 +2470,44 @@ int mca_spml_ucx_team_destroy(shmem_team_t team)
     return OSHMEM_SUCCESS;
 }
 
-/* This routine is not implemented */
 int mca_spml_ucx_team_get(shmem_ctx_t ctx, shmem_team_t *team)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
+
+    if (OPAL_UNLIKELY(SHMEM_CTX_INVALID == ctx)) {
+        *team = SHMEM_TEAM_INVALID;
+        return OSHMEM_ERROR;
+    }
+
+    /* Contexts of SHMEM_TEAM_WORLD (including the default one) store NULL */
+    *team = (NULL == ucx_ctx->team) ? SHMEM_TEAM_WORLD : ucx_ctx->team;
+
+    return OSHMEM_SUCCESS;
 }
 
-/* This routine is not implemented */
 int mca_spml_ucx_team_create_ctx(shmem_team_t team, long options, shmem_ctx_t *ctx)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    int rc;
+
+    *ctx = SHMEM_CTX_INVALID;
+
+    if (OPAL_UNLIKELY(SHMEM_TEAM_INVALID == team)) {
+        return OSHMEM_ERROR;
+    }
+
+    rc = mca_spml_ucx_ctx_create(options, ctx);
+    if (OPAL_UNLIKELY(OSHMEM_SUCCESS != rc)) {
+        *ctx = SHMEM_CTX_INVALID;
+        return rc;
+    }
+
+    /* A reused idle context may still refer to its previous team */
+    ((mca_spml_ucx_ctx_t *)*ctx)->team = (SHMEM_TEAM_WORLD == team) ? NULL : team;
+
+    return OSHMEM_SUCCESS;
 }
 
-static size_t mca_spml_ucx_datatype_size(int datatype)
-{
-    switch (datatype) {
-    case SHMEM_CHAR:
-    case SHMEM_UCHAR:
-    case SHMEM_SCHAR:
-    case SHMEM_BYTE:
-    case SHMEM_INT8_T:
-    case SHMEM_UINT8_T:
-        return 1;
-    case SHMEM_SHORT:
-    case SHMEM_USHORT:
-    case SHMEM_INT16_T:
-    case SHMEM_UINT16_T:
-        return 2;
-    case SHMEM_INT:
-    case SHMEM_UINT:
-    case SHMEM_INT32_T:
-    case SHMEM_UINT32_T:
-    case SHMEM_FLOAT:
-        return 4;
-    case SHMEM_LONG:
-    case SHMEM_ULONG:
-    case SHMEM_LLONG:
-    case SHMEM_ULLONG:
-    case SHMEM_INT64_T:
-    case SHMEM_UINT64_T:
-    case SHMEM_DOUBLE:
-        return 8;
-    case SHMEM_SIZE_T:
-        return sizeof(size_t);
-    case SHMEM_PTRDIFF_T:
-        return sizeof(ptrdiff_t);
-    case SHMEM_LDOUBLE:
-        return sizeof(long double);
-    default:
-        return 0;
-    }
-}
+static size_t mca_spml_ucx_datatype_size(int datatype);
 
 int mca_spml_ucx_team_alltoall(shmem_team_t team, void
         *dest, const void *source, size_t nelems, int datatype)

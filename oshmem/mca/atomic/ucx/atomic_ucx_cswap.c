@@ -26,12 +26,13 @@ int mca_atomic_ucx_cswap(shmem_ctx_t ctx,
                          uint64_t cond,
                          uint64_t value,
                          size_t size,
-                         int pe)
+                         int team_pe)
 {
     ucs_status_ptr_t status_ptr;
     spml_ucx_mkey_t *ucx_mkey;
     uint64_t rva;
     mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
+    int pe = mca_spml_ucx_ctx_world_pe(ctx, team_pe);
 #if HAVE_DECL_UCP_ATOMIC_OP_NBX
     ucp_request_param_t param = {
         .op_attr_mask = UCP_OP_ATTR_FIELD_DATATYPE |

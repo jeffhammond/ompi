@@ -56,7 +56,7 @@ int mca_atomic_ucx_op(shmem_ctx_t ctx,
                       void *target,
                       uint64_t value,
                       size_t size,
-                      int pe,
+                      int team_pe,
 #if HAVE_DECL_UCP_ATOMIC_OP_NBX
                       ucp_atomic_op_t op)
 #else
@@ -66,6 +66,7 @@ int mca_atomic_ucx_op(shmem_ctx_t ctx,
     spml_ucx_mkey_t *ucx_mkey;
     uint64_t rva;
     mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
+    int pe = mca_spml_ucx_ctx_world_pe(ctx, team_pe);
 #if HAVE_DECL_UCP_ATOMIC_OP_NBX
     ucs_status_ptr_t status_ptr;
 #else
@@ -110,7 +111,7 @@ int mca_atomic_ucx_fop(shmem_ctx_t ctx,
                        void *prev,
                        uint64_t value,
                        size_t size,
-                       int pe,
+                       int team_pe,
 #if HAVE_DECL_UCP_ATOMIC_OP_NBX
                        ucp_atomic_op_t op)
 #else
@@ -122,6 +123,7 @@ int mca_atomic_ucx_fop(shmem_ctx_t ctx,
     uint64_t rva;
     int res;
     mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
+    int pe = mca_spml_ucx_ctx_world_pe(ctx, team_pe);
 #if HAVE_DECL_UCP_ATOMIC_OP_NBX
     ucp_request_param_t param = {
         .op_attr_mask = UCP_OP_ATTR_FIELD_DATATYPE |
