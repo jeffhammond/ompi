@@ -11,6 +11,16 @@ static struct ompi_datatype_t* shmem_dtype_to_ompi_dtype(oshmem_op_t *op)
     int dtype = op->dt;
     int dtsize = op->dt_size * 8;
     switch (dtype) {
+    case OSHMEM_OP_TYPE_INT8_T:
+        return &ompi_mpi_int8_t.dt;
+    case OSHMEM_OP_TYPE_UINT8_T:
+        return &ompi_mpi_uint8_t.dt;
+    case OSHMEM_OP_TYPE_UINT16_T:
+        return &ompi_mpi_uint16_t.dt;
+    case OSHMEM_OP_TYPE_UINT32_T:
+        return &ompi_mpi_uint32_t.dt;
+    case OSHMEM_OP_TYPE_UINT64_T:
+        return &ompi_mpi_uint64_t.dt;
     case OSHMEM_OP_TYPE_FLOAT:
         return &ompi_mpi_float.dt;
     case OSHMEM_OP_TYPE_DOUBLE:

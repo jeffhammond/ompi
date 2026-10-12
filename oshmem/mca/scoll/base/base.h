@@ -32,8 +32,20 @@ BEGIN_C_DECLS
  */
 OSHMEM_DECLSPEC extern long* mca_scoll_sync_array;
 
-/* Pool of pSync arrays for the barrier of user created teams. Slot i is
- * mca_scoll_team_sync_pool + i * _SHMEM_BARRIER_SYNC_SIZE. The pool and the
+/* Size of a pSync array that is large enough for any team collective (barrier,
+ * broadcast, collect, reduce). */
+#define MCA_SCOLL_TEAM_SYNC_SIZE _SHMEM_COLLECT_SYNC_SIZE
+
+/* Every team has MCA_SCOLL_TEAM_SYNC_SETS such arrays. Set 0 is used by the
+ * barrier. The other sets are used by the broadcast, collect and reduce in
+ * turn: scoll/basic resets pSync when a collective completes, which would
+ * clobber the initial signals of a PE that is already in the next collective
+ * if consecutive collectives used the same pSync. */
+#define MCA_SCOLL_TEAM_SYNC_SETS 3
+#define MCA_SCOLL_TEAM_PSYNC_LEN (MCA_SCOLL_TEAM_SYNC_SETS * MCA_SCOLL_TEAM_SYNC_SIZE)
+
+/* Pool of pSync arrays for the collectives of user created teams. Slot i is
+ * mca_scoll_team_sync_pool + i * MCA_SCOLL_TEAM_PSYNC_LEN. The pool and the
  * bitmap of the slots in use by this PE are allocated symmetrically at init,
  * so teams (which are created by a subset of the PEs) need no allocation. */
 #define MCA_SCOLL_TEAM_SYNC_SLOTS ((int) (sizeof(unsigned long) * 8))

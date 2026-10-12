@@ -67,10 +67,10 @@ int mca_scoll_enable(void)
         void* ptr = (void*) mca_scoll_sync_array;
         int i = 0;
 
-        MCA_MEMHEAP_CALL(private_alloc((_SHMEM_BARRIER_SYNC_SIZE * sizeof(*mca_scoll_sync_array)), &ptr));
+        MCA_MEMHEAP_CALL(private_alloc((MCA_SCOLL_TEAM_PSYNC_LEN * sizeof(*mca_scoll_sync_array)), &ptr));
         mca_scoll_sync_array = ptr;
 
-        for (i = 0; i < _SHMEM_BARRIER_SYNC_SIZE; i++) {
+        for (i = 0; i < MCA_SCOLL_TEAM_PSYNC_LEN; i++) {
             mca_scoll_sync_array[i] = _SHMEM_SYNC_VALUE;
         }
     }
@@ -78,7 +78,7 @@ int mca_scoll_enable(void)
     if (!mca_scoll_team_sync_pool) {
         void* ptr = NULL;
         int i = 0;
-        size_t n = MCA_SCOLL_TEAM_SYNC_SLOTS * _SHMEM_BARRIER_SYNC_SIZE;
+        size_t n = MCA_SCOLL_TEAM_SYNC_SLOTS * MCA_SCOLL_TEAM_PSYNC_LEN;
 
         ret = MCA_MEMHEAP_CALL(private_alloc(n * sizeof(*mca_scoll_team_sync_pool), &ptr));
         if (OSHMEM_SUCCESS != ret) {
