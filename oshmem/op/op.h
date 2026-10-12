@@ -37,6 +37,11 @@ enum {
     OSHMEM_OP_TYPE_INT16_T,     /** C integer: int16_t */
     OSHMEM_OP_TYPE_INT32_T,     /** C integer: int32_t */
     OSHMEM_OP_TYPE_INT64_T,     /** C integer: int64_t */
+    OSHMEM_OP_TYPE_INT8_T,      /** C integer: int8_t */
+    OSHMEM_OP_TYPE_UINT8_T,     /** C integer: uint8_t */
+    OSHMEM_OP_TYPE_UINT16_T,    /** C integer: uint16_t */
+    OSHMEM_OP_TYPE_UINT32_T,    /** C integer: uint32_t */
+    OSHMEM_OP_TYPE_UINT64_T,    /** C integer: uint64_t */
 
     OSHMEM_OP_TYPE_FLOAT,       /** Floating point: float */
     OSHMEM_OP_TYPE_DOUBLE,      /** Floating point: double */
@@ -202,6 +207,23 @@ OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_prod_freal16;
 OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_prod_int16;
 OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_prod_int32;
 OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_prod_int64;
+
+/* Operations on the fixed-width types that are only needed by the team
+ * reductions (the C types are mapped by size and signedness) */
+#define OSHMEM_OP_DECLARE_INT_TYPE(type_name)                              \
+    OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_and_##type_name;         \
+    OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_or_##type_name;          \
+    OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_xor_##type_name;         \
+    OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_max_##type_name;         \
+    OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_min_##type_name;         \
+    OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_sum_##type_name;         \
+    OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_prod_##type_name;
+
+OSHMEM_OP_DECLARE_INT_TYPE(int8)
+OSHMEM_OP_DECLARE_INT_TYPE(uint8)
+OSHMEM_OP_DECLARE_INT_TYPE(uint16)
+OSHMEM_OP_DECLARE_INT_TYPE(uint32)
+OSHMEM_OP_DECLARE_INT_TYPE(uint64)
 
 /* SWAP */
 OSHMEM_DECLSPEC extern oshmem_op_t* oshmem_op_swap_int;

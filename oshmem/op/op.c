@@ -156,6 +156,23 @@ oshmem_op_t* oshmem_op_prod_int16 = NULL;
 oshmem_op_t* oshmem_op_prod_int32 = NULL;
 oshmem_op_t* oshmem_op_prod_int64 = NULL;
 
+/* Operations on the fixed-width types that are only needed by the team
+ * reductions, see oshmem/op/op.h */
+#define OSHMEM_OP_DEFINE_INT_TYPE(type_name)    \
+    oshmem_op_t* oshmem_op_and_##type_name = NULL;  \
+    oshmem_op_t* oshmem_op_or_##type_name = NULL;   \
+    oshmem_op_t* oshmem_op_xor_##type_name = NULL;  \
+    oshmem_op_t* oshmem_op_max_##type_name = NULL;  \
+    oshmem_op_t* oshmem_op_min_##type_name = NULL;  \
+    oshmem_op_t* oshmem_op_sum_##type_name = NULL;  \
+    oshmem_op_t* oshmem_op_prod_##type_name = NULL;
+
+OSHMEM_OP_DEFINE_INT_TYPE(int8)
+OSHMEM_OP_DEFINE_INT_TYPE(uint8)
+OSHMEM_OP_DEFINE_INT_TYPE(uint16)
+OSHMEM_OP_DEFINE_INT_TYPE(uint32)
+OSHMEM_OP_DEFINE_INT_TYPE(uint64)
+
 /* SWAP */
 oshmem_op_t* oshmem_op_swap_int = NULL;
 oshmem_op_t* oshmem_op_swap_long = NULL;
@@ -314,6 +331,21 @@ FUNC_OP_CREATE(prod, int16, int16_t, __prod_op)
 FUNC_OP_CREATE(prod, int32, int32_t, __prod_op)
 FUNC_OP_CREATE(prod, int64, int64_t, __prod_op)
 
+#define FUNC_OP_CREATE_INT_TYPE(type_name, type)        \
+    FUNC_OP_CREATE(and, type_name, type, __and_op)      \
+    FUNC_OP_CREATE(or, type_name, type, __or_op)        \
+    FUNC_OP_CREATE(xor, type_name, type, __xor_op)      \
+    FUNC_OP_CREATE(max, type_name, type, __max_op)      \
+    FUNC_OP_CREATE(min, type_name, type, __min_op)      \
+    FUNC_OP_CREATE(sum, type_name, type, __sum_op)      \
+    FUNC_OP_CREATE(prod, type_name, type, __prod_op)
+
+FUNC_OP_CREATE_INT_TYPE(int8, int8_t)
+FUNC_OP_CREATE_INT_TYPE(uint8, uint8_t)
+FUNC_OP_CREATE_INT_TYPE(uint16, uint16_t)
+FUNC_OP_CREATE_INT_TYPE(uint32, uint32_t)
+FUNC_OP_CREATE_INT_TYPE(uint64, uint64_t)
+
 /* SWAP */
 #define __swap_op(a, b) (a)
 FUNC_OP_CREATE(swap, int, int, __swap_op)
@@ -454,6 +486,22 @@ int oshmem_op_init(void)
     OBJ_OP_CREATE(prod, int16, int16_t, OSHMEM_OP_PROD, OSHMEM_OP_TYPE_INT16_T);
     OBJ_OP_CREATE(prod, int32, int32_t, OSHMEM_OP_PROD, OSHMEM_OP_TYPE_INT32_T);
     OBJ_OP_CREATE(prod, int64, int64_t, OSHMEM_OP_PROD, OSHMEM_OP_TYPE_INT64_T);
+
+    /* Fixed-width types used by the team reductions */
+#define OBJ_OP_CREATE_INT_TYPE(type_name, type, dt_id)                  \
+    OBJ_OP_CREATE(and, type_name, type, OSHMEM_OP_AND, dt_id);          \
+    OBJ_OP_CREATE(or, type_name, type, OSHMEM_OP_OR, dt_id);            \
+    OBJ_OP_CREATE(xor, type_name, type, OSHMEM_OP_XOR, dt_id);          \
+    OBJ_OP_CREATE(max, type_name, type, OSHMEM_OP_MAX, dt_id);          \
+    OBJ_OP_CREATE(min, type_name, type, OSHMEM_OP_MIN, dt_id);          \
+    OBJ_OP_CREATE(sum, type_name, type, OSHMEM_OP_SUM, dt_id);          \
+    OBJ_OP_CREATE(prod, type_name, type, OSHMEM_OP_PROD, dt_id)
+
+    OBJ_OP_CREATE_INT_TYPE(int8, int8_t, OSHMEM_OP_TYPE_INT8_T);
+    OBJ_OP_CREATE_INT_TYPE(uint8, uint8_t, OSHMEM_OP_TYPE_UINT8_T);
+    OBJ_OP_CREATE_INT_TYPE(uint16, uint16_t, OSHMEM_OP_TYPE_UINT16_T);
+    OBJ_OP_CREATE_INT_TYPE(uint32, uint32_t, OSHMEM_OP_TYPE_UINT32_T);
+    OBJ_OP_CREATE_INT_TYPE(uint64, uint64_t, OSHMEM_OP_TYPE_UINT64_T);
 
     /* SWAP */
     /* swap op is not used in reduce operations, let's set ID to invalid

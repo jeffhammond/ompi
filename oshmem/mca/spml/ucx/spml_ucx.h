@@ -140,6 +140,7 @@ typedef struct mca_spml_ucx_team {
     oshmem_group_t              *group;   /* group of the member PEs, used by scoll */
     long                        *pSync;   /* symmetric work array for scoll operations */
     int                         slot;     /* index of pSync in mca_scoll_team_sync_pool */
+    int                         coll_set; /* pSync set used by the last collective */
 } mca_spml_ucx_team_t;
 
 struct mca_spml_ucx {
