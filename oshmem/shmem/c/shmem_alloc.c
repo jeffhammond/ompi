@@ -66,6 +66,12 @@ static inline void* _shmalloc_zero(size_t size, int zero)
     void* pBuff = NULL;
 
     RUNTIME_CHECK_INIT();
+
+    /* Zero size performs no action: no allocation and no barrier. */
+    if (0 == size) {
+        return NULL;
+    }
+
     RUNTIME_CHECK_WITH_MEMHEAP_SIZE(size);
 
     SHMEM_MUTEX_LOCK(shmem_internal_mutex_alloc);
@@ -99,6 +105,11 @@ void* shmem_malloc_with_hints(size_t size, long hint)
     }
 
     RUNTIME_CHECK_INIT();
+
+    if (0 == size) {
+        return NULL;
+    }
+
     RUNTIME_CHECK_WITH_MEMHEAP_SIZE(size);
 
     SHMEM_MUTEX_LOCK(shmem_internal_mutex_alloc);
