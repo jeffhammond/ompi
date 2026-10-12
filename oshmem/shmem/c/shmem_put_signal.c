@@ -119,6 +119,7 @@
 
 
 #pragma weak shmem_signal_fetch                   = pshmem_signal_fetch
+#pragma weak shmem_signal_wait_until              = pshmem_signal_wait_until
 
 
 
@@ -229,3 +230,31 @@ uint64_t shmem_signal_fetch(const uint64_t *sig_addr)
     return shmem_uint64_atomic_fetch(sig_addr, pshmem_my_pe());
 }
 
+uint64_t shmem_signal_wait_until(uint64_t *sig_addr, int cmp, uint64_t cmp_value)
+{
+    uint64_t value;
+    int satisfied = 0;
+    int rc;
+
+    RUNTIME_CHECK_INIT();
+
+    /*
+     * The wait path only reports that the condition held at some point; the
+     * signal may be updated again before it returns. Capture the value with
+     * an atomic fetch and re-check it, so that the returned value is one
+     * that actually satisfied the comparison.
+     */
+    do {
+        rc = MCA_SPML_CALL(wait((void*)sig_addr, cmp, (void*)&cmp_value,
+                                SHMEM_UINT64_T));
+        RUNTIME_CHECK_RC(rc);
+
+        value = shmem_signal_fetch(sig_addr);
+
+        rc = MCA_SPML_CALL(test((void*)&value, cmp, (void*)&cmp_value,
+                                SHMEM_UINT64_T, &satisfied));
+        RUNTIME_CHECK_RC(rc);
+    } while (!satisfied);
+
+    return value;
+}
