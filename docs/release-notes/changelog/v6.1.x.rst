@@ -125,6 +125,11 @@ Open MPI version v6.1.0
   Previously they returned a valid pointer and synchronized all PEs.
   ``shmem_realloc(ptr, 0)`` now frees ``ptr`` and returns ``NULL``.
 
+- ``shmem_calloc`` now zeroes its block before the barrier that ends the
+  allocation.  Previously the block was zeroed after the barrier, so a
+  store from a PE that left the barrier first could be overwritten by
+  the zeroing on a slower PE.
+
 - Nonblocking file I/O no longer loses data when the operating system's
   asynchronous I/O queue fills, which on macOS it readily does: the
   ``posix`` ``fbtl`` component sized its batch of concurrent ``aio_write``

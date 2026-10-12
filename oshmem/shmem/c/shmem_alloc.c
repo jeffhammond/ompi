@@ -30,6 +30,7 @@
 #include "oshmem/shmem/c/profile-defines.h"
 #endif
 
+static inline void* _shmalloc_zero(size_t size, int zero);
 static inline void* _shmalloc(size_t size);
 
 void* shmem_malloc(size_t size)
@@ -49,11 +50,12 @@ void* shmem_calloc(size_t count, size_t size)
 
     req_sz = count * size;
     if (!req_sz) return NULL;
-    void *ptr = _shmalloc(req_sz);
-    if (ptr) {
-        memset(ptr, 0, req_sz);
-    }
-    return ptr;
+    /*
+     * The memory must be zeroed before the barrier in the allocation, so
+     * that a store from a PE that leaves the barrier early cannot be
+     * overwritten by the zeroing on a slower PE.
+     */
+    return _shmalloc_zero(req_sz, 1);
 }
 
 void* shmalloc(size_t size)
@@ -62,6 +64,11 @@ void* shmalloc(size_t size)
 }
 
 static inline void* _shmalloc(size_t size)
+{
+    return _shmalloc_zero(size, 0);
+}
+
+static inline void* _shmalloc_zero(size_t size, int zero)
 {
     int rc;
     void* pBuff = NULL;
@@ -86,6 +93,9 @@ static inline void* _shmalloc(size_t size)
                           "Allocation with shmalloc(size=%lu) failed.",
                           (unsigned long)size);
         return NULL ;
+    }
+    if (zero) {
+        memset(pBuff, 0, size);
     }
 #if OSHMEM_SPEC_COMPAT == 1
     shmem_barrier_all();
