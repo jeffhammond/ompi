@@ -18,7 +18,7 @@
       parameter ( SHMEM_MAJOR_VERSION = 1 )
 
       integer SHMEM_MINOR_VERSION
-      parameter ( SHMEM_MINOR_VERSION = 4 )
+      parameter ( SHMEM_MINOR_VERSION = 5 )
 
       integer SHMEM_MAX_NAME_LEN
       parameter ( SHMEM_MAX_NAME_LEN = 256-1 )
