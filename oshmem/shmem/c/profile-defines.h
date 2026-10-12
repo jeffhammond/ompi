@@ -593,6 +593,7 @@
 #define shmem_ctx_putmem_signal_nbi              pshmem_ctx_putmem_signal_nbi
 
 #define shmem_signal_fetch                       pshmem_signal_fetch
+#define shmem_signal_wait_until                  pshmem_signal_wait_until
 
 /*
  * Block data put routines

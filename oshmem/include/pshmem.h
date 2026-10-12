@@ -1224,6 +1224,7 @@ OSHMEM_DECLSPEC void pshmem_ctx_putmem_signal_nbi(shmem_ctx_t ctx, void *dest, c
 
 
 OSHMEM_DECLSPEC uint64_t pshmem_signal_fetch(const uint64_t *sig_addr);
+OSHMEM_DECLSPEC uint64_t pshmem_signal_wait_until(uint64_t *sig_addr, int cmp, uint64_t cmp_value);
 
 
 /*
