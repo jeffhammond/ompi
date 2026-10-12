@@ -2445,19 +2445,120 @@ int mca_spml_ucx_team_create_ctx(shmem_team_t team, long options, shmem_ctx_t *c
     return OSHMEM_ERR_NOT_IMPLEMENTED;
 }
 
-/* This routine is not implemented */
+static size_t mca_spml_ucx_datatype_size(int datatype)
+{
+    switch (datatype) {
+    case SHMEM_CHAR:
+    case SHMEM_UCHAR:
+    case SHMEM_SCHAR:
+    case SHMEM_BYTE:
+    case SHMEM_INT8_T:
+    case SHMEM_UINT8_T:
+        return 1;
+    case SHMEM_SHORT:
+    case SHMEM_USHORT:
+    case SHMEM_INT16_T:
+    case SHMEM_UINT16_T:
+        return 2;
+    case SHMEM_INT:
+    case SHMEM_UINT:
+    case SHMEM_INT32_T:
+    case SHMEM_UINT32_T:
+    case SHMEM_FLOAT:
+        return 4;
+    case SHMEM_LONG:
+    case SHMEM_ULONG:
+    case SHMEM_LLONG:
+    case SHMEM_ULLONG:
+    case SHMEM_INT64_T:
+    case SHMEM_UINT64_T:
+    case SHMEM_DOUBLE:
+        return 8;
+    case SHMEM_SIZE_T:
+        return sizeof(size_t);
+    case SHMEM_PTRDIFF_T:
+        return sizeof(ptrdiff_t);
+    case SHMEM_LDOUBLE:
+        return sizeof(long double);
+    default:
+        return 0;
+    }
+}
+
 int mca_spml_ucx_team_alltoall(shmem_team_t team, void
         *dest, const void *source, size_t nelems, int datatype)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    oshmem_group_t *group;
+    long *pSync;
+    size_t size;
+
+    SPML_UCX_VALIDATE_TEAM(team);
+
+    size = mca_spml_ucx_datatype_size(datatype);
+    group = mca_spml_ucx_team_get_group(team);
+    pSync = mca_spml_ucx_team_get_psync(team);
+    if (OPAL_UNLIKELY((0 == size) || (NULL == group) || (NULL == pSync))) {
+        SPML_UCX_ERROR("Invalid team or datatype at %s", __func__);
+        return OSHMEM_ERROR;
+    }
+
+    return group->g_scoll.scoll_alltoall(group, dest, source, 1, 1, nelems,
+                                         size, pSync, SCOLL_DEFAULT_ALG);
 }
 
-/* This routine is not implemented */
+/* scoll has no team-aware strided alltoall, so do it with puts. Block k of
+ * dest on PE j receives block j of source on the k-th PE of the team; element
+ * e of block b lives at (b * nelems + e) * stride. */
 int mca_spml_ucx_team_alltoalls(shmem_team_t team, void
         *dest, const void *source, ptrdiff_t dst, ptrdiff_t sst, size_t nelems,
         int datatype)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    oshmem_group_t *group;
+    size_t size;
+    int my_idx;
+    int idx;
+    int pe;
+    int i;
+    size_t e;
+    int rc;
+
+    SPML_UCX_VALIDATE_TEAM(team);
+
+    size = mca_spml_ucx_datatype_size(datatype);
+    group = mca_spml_ucx_team_get_group(team);
+    if (OPAL_UNLIKELY((0 == size) || (NULL == group) || (dst < 1) || (sst < 1))) {
+        SPML_UCX_ERROR("Invalid team, datatype or stride at %s", __func__);
+        return OSHMEM_ERROR;
+    }
+
+    /* peers' dest buffers must be ready before they are written */
+    rc = mca_spml_ucx_team_sync(team);
+    if (OPAL_UNLIKELY(OSHMEM_SUCCESS != rc)) {
+        return rc;
+    }
+
+    my_idx = oshmem_proc_group_find_id(group, group->my_pe);
+    for (i = 0; i < group->proc_count; i++) {
+        /* start at different peers to spread the traffic */
+        idx = (my_idx + i) % group->proc_count;
+        pe = oshmem_proc_pe_vpid(group, idx);
+        for (e = 0; e < nelems; e++) {
+            rc = mca_spml_ucx_put(oshmem_ctx_default,
+                    (char *)dest + size * dst * (my_idx * nelems + e), size,
+                    (char *)source + size * sst * (idx * nelems + e), pe);
+            if (OPAL_UNLIKELY(OSHMEM_SUCCESS != rc)) {
+                return rc;
+            }
+        }
+    }
+
+    /* complete the puts, then wait until every PE has done so */
+    rc = mca_spml_ucx_quiet(oshmem_ctx_default);
+    if (OPAL_UNLIKELY(OSHMEM_SUCCESS != rc)) {
+        return rc;
+    }
+
+    return mca_spml_ucx_team_sync(team);
 }
 
 /* Size in bytes of the elements of a SHMEM_<type> datatype code */
