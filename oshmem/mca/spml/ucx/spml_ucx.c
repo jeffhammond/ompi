@@ -36,6 +36,7 @@
 #include "oshmem/mca/spml/base/base.h"
 #include "oshmem/mca/spml/base/spml_base_putreq.h"
 #include "oshmem/mca/atomic/atomic.h"
+#include "oshmem/mca/scoll/base/base.h"
 #include "oshmem/runtime/runtime.h"
 
 #include "oshmem/mca/spml/ucx/spml_ucx_component.h"
@@ -95,6 +96,8 @@ mca_spml_ucx_t mca_spml_ucx = {
         .spml_team_split_strided        = mca_spml_ucx_team_split_strided,
         .spml_team_split_2d             = mca_spml_ucx_team_split_2d,
         .spml_team_destroy              = mca_spml_ucx_team_destroy,
+        .spml_team_init_shared          = mca_spml_ucx_team_init_shared,
+        .spml_team_fini_shared          = mca_spml_ucx_team_fini_shared,
         .spml_team_get                  = mca_spml_ucx_team_get,
         .spml_team_create_ctx           = mca_spml_ucx_team_create_ctx,
         .spml_team_alltoall             = mca_spml_ucx_team_alltoall,
@@ -1791,15 +1794,61 @@ size_t mca_spml_ucx_test_some_vector(void *ivars, int cmp,
     RUNTIME_SHMEM_NOT_IMPLEMENTED_API_ABORT_RET_SIZE_T();
 }
 
-/* This routine is not implemented */
+oshmem_group_t *mca_spml_ucx_team_get_group(shmem_team_t team)
+{
+    if (OPAL_UNLIKELY(team == SHMEM_TEAM_INVALID)) {
+        return NULL;
+    }
+
+    if (team == SHMEM_TEAM_WORLD) {
+        return oshmem_group_all;
+    }
+
+    return ((mca_spml_ucx_team_t *)team)->group;
+}
+
+long *mca_spml_ucx_team_get_psync(shmem_team_t team)
+{
+    if (OPAL_UNLIKELY(team == SHMEM_TEAM_INVALID)) {
+        return NULL;
+    }
+
+    if (team == SHMEM_TEAM_WORLD) {
+        return mca_scoll_sync_array;
+    }
+
+    return ((mca_spml_ucx_team_t *)team)->pSync;
+}
+
 int mca_spml_ucx_team_sync(shmem_team_t team)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    oshmem_group_t *group;
+    long *pSync;
+
+    SPML_UCX_VALIDATE_TEAM(team);
+
+    group = mca_spml_ucx_team_get_group(team);
+    pSync = mca_spml_ucx_team_get_psync(team);
+    if (OPAL_UNLIKELY((NULL == group) || (NULL == pSync))) {
+        SPML_UCX_ERROR("Team has no group or pSync at %s", __func__);
+        return OSHMEM_ERROR;
+    }
+
+#if OSHMEM_SPEC_COMPAT == 1
+    /* all outstanding puts must be completed */
+    shmem_quiet();
+#endif
+
+    return group->g_scoll.scoll_barrier(group, pSync, SCOLL_DEFAULT_ALG);
 }
 
 int mca_spml_ucx_team_my_pe(shmem_team_t team)
 {
     mca_spml_ucx_team_t *ucx_team = (mca_spml_ucx_team_t *)team;
+
+    if (team == SHMEM_TEAM_INVALID) {
+        return SPML_UCX_PE_NOT_IN_TEAM;
+    }
 
     if (team == SHMEM_TEAM_WORLD) {
         return shmem_my_pe();
@@ -1811,6 +1860,10 @@ int mca_spml_ucx_team_my_pe(shmem_team_t team)
 int mca_spml_ucx_team_n_pes(shmem_team_t team)
 {
     mca_spml_ucx_team_t *ucx_team = (mca_spml_ucx_team_t *)team;
+
+    if (team == SHMEM_TEAM_INVALID) {
+        return SPML_UCX_PE_NOT_IN_TEAM;
+    }
 
     if (team == SHMEM_TEAM_WORLD) {
         return shmem_n_pes();
@@ -1844,11 +1897,19 @@ int mca_spml_ucx_team_translate_pe(shmem_team_t src_team, int src_pe,
     mca_spml_ucx_team_t *ucx_dest_team = (mca_spml_ucx_team_t*) dest_team;
     int global_pe;
 
+    if ((src_team == SHMEM_TEAM_INVALID) || (dest_team == SHMEM_TEAM_INVALID)) {
+        return SPML_UCX_PE_NOT_IN_TEAM;
+    }
+
     if ((src_pe == SPML_UCX_PE_NOT_IN_TEAM) || (src_team == dest_team)) {
         return src_pe;
     }
 
-    global_pe = ucx_src_team->start + src_pe * ucx_src_team->stride;
+    if (src_team == SHMEM_TEAM_WORLD) {
+        global_pe = src_pe;
+    } else {
+        global_pe = ucx_src_team->start + src_pe * ucx_src_team->stride;
+    }
 
     if (dest_team == SHMEM_TEAM_WORLD) {
         return global_pe;
@@ -1872,9 +1933,19 @@ int mca_spml_ucx_team_split_strided(shmem_team_t parent_team, int start, int
     int parent_start;
     int parent_stride;
     int my_pe;
+    unsigned long used;
+    int slot;
+    int rc;
+    int i;
 
     SPML_UCX_ASSERT(((start + size * stride) <= oshmem_num_procs()) &&
                     (stride > 0) && (size > 0));
+
+    /* the PEs that are not in the parent team get SHMEM_TEAM_INVALID */
+    if (parent_team == SHMEM_TEAM_INVALID) {
+        *new_team = SHMEM_TEAM_INVALID;
+        return OSHMEM_ERROR;
+    }
 
     if (parent_team == SHMEM_TEAM_WORLD) {
         parent_pe = shmem_my_pe();
@@ -1895,9 +1966,53 @@ int mca_spml_ucx_team_split_strided(shmem_team_t parent_team, int start, int
         my_pe = SPML_UCX_PE_NOT_IN_TEAM;
     }
 
+    /* The members of the new team must agree on a pSync slot that is free on
+     * all of them. The parent team is stable between the two barriers (every
+     * PE is inside this call), so the slot maps of the members can be read. */
+    rc = mca_spml_ucx_team_sync(parent_team);
+    if (OPAL_UNLIKELY(OSHMEM_SUCCESS != rc)) {
+        return rc;
+    }
+
+    slot = -1;
+    if (SPML_UCX_PE_NOT_IN_TEAM != my_pe) {
+        used = *(volatile unsigned long *)mca_scoll_team_slot_map;
+        for (i = 0; i < size; i++) {
+            used |= shmem_ulong_g(mca_scoll_team_slot_map,
+                                  parent_start + (start + i * stride) * parent_stride);
+        }
+        for (i = 0; i < MCA_SCOLL_TEAM_SYNC_SLOTS; i++) {
+            if (!(used & (1UL << i))) {
+                slot = i;
+                break;
+            }
+        }
+    }
+
+    rc = mca_spml_ucx_team_sync(parent_team);
+    if (OPAL_UNLIKELY(OSHMEM_SUCCESS != rc)) {
+        return rc;
+    }
+
+    if (SPML_UCX_PE_NOT_IN_TEAM == my_pe) {
+        *new_team = SHMEM_TEAM_INVALID;
+        return OSHMEM_SUCCESS;
+    }
+
+    if (OPAL_UNLIKELY(slot < 0)) {
+        SPML_UCX_ERROR("Too many teams, at most %d teams per PE are supported",
+                       MCA_SCOLL_TEAM_SYNC_SLOTS - 1);
+        *new_team = SHMEM_TEAM_INVALID;
+        return OSHMEM_ERR_OUT_OF_RESOURCE;
+    }
+
     /* In order to simplify pe translations start and stride are calculated with respect to
      * world_team */
-    ucx_new_team = (mca_spml_ucx_team_t *)malloc(sizeof(mca_spml_ucx_team_t));
+    ucx_new_team = (mca_spml_ucx_team_t *)calloc(1, sizeof(mca_spml_ucx_team_t));
+    if (OPAL_UNLIKELY(NULL == ucx_new_team)) {
+        return OSHMEM_ERR_OUT_OF_RESOURCE;
+    }
+
     ucx_new_team->start = parent_start + (start * parent_stride);
     ucx_new_team->stride = parent_stride * stride;
 
@@ -1905,12 +2020,25 @@ int mca_spml_ucx_team_split_strided(shmem_team_t parent_team, int start, int
     ucx_new_team->my_pe = my_pe;
 
     ucx_new_team->config = calloc(1, sizeof(mca_spml_ucx_team_config_t));
+    if (OPAL_UNLIKELY(NULL == ucx_new_team->config)) {
+        free(ucx_new_team);
+        return OSHMEM_ERR_OUT_OF_RESOURCE;
+    }
 
     if (config != NULL) {
         memcpy(&ucx_new_team->config->super, config, sizeof(shmem_team_config_t));
     }
 
     ucx_new_team->parent_team = (mca_spml_ucx_team_t*)parent_team;
+    ucx_new_team->slot = slot;
+    ucx_new_team->pSync = mca_scoll_team_sync_pool + slot * SHMEM_BARRIER_SYNC_SIZE;
+    *(volatile unsigned long *)mca_scoll_team_slot_map |= 1UL << slot;
+
+    /* the group is cached by oshmem_proc_group_create(), arbitrary strides
+     * are supported */
+    ucx_new_team->group = oshmem_proc_group_create_nofail(ucx_new_team->start,
+                                                          ucx_new_team->stride,
+                                                          size);
 
     *new_team = (shmem_team_t)ucx_new_team;
 
@@ -1923,19 +2051,39 @@ int mca_spml_ucx_team_split_2d(shmem_team_t parent_team, int xrange, const
         shmem_team_t *yaxis_team)
 {
     mca_spml_ucx_team_t *ucx_parent_team = (mca_spml_ucx_team_t*) parent_team;
-    int parent_n_pes = (parent_team == SHMEM_TEAM_WORLD) ?
-                                        oshmem_num_procs() :
-                                        ucx_parent_team->n_pes;
-    int parent_my_pe = (parent_team == SHMEM_TEAM_WORLD) ?
-                                        shmem_my_pe() :
-                                        ucx_parent_team->my_pe;
-    int yrange = parent_n_pes / xrange;
-    int pe_x = parent_my_pe % xrange;
-    int pe_y = parent_my_pe / xrange;
+    int parent_n_pes;
+    int parent_my_pe;
+    int xsize;
+    int ysize;
+    int pe_x;
+    int pe_y;
     int rc;
 
+    if (parent_team == SHMEM_TEAM_INVALID) {
+        *xaxis_team = SHMEM_TEAM_INVALID;
+        *yaxis_team = SHMEM_TEAM_INVALID;
+        return OSHMEM_ERROR;
+    }
+
+    parent_n_pes = (parent_team == SHMEM_TEAM_WORLD) ? oshmem_num_procs() :
+                                                       ucx_parent_team->n_pes;
+    parent_my_pe = (parent_team == SHMEM_TEAM_WORLD) ? shmem_my_pe() :
+                                                       ucx_parent_team->my_pe;
+
+    /* xrange larger than the parent team behaves as if it was equal to its size */
+    if (xrange > parent_n_pes) {
+        xrange = parent_n_pes;
+    }
+
+    /* yrange is ceil(parent_n_pes / xrange), the last row and the columns
+     * past the last PE of the last row can be shorter */
+    pe_x = parent_my_pe % xrange;
+    pe_y = parent_my_pe / xrange;
+    xsize = opal_min(xrange, parent_n_pes - pe_y * xrange);
+    ysize = (parent_n_pes - pe_x + xrange - 1) / xrange;
+
     /* Create x-team of my_pe */
-    rc = mca_spml_ucx_team_split_strided(parent_team, pe_y * xrange, 1, xrange,
+    rc = mca_spml_ucx_team_split_strided(parent_team, pe_y * xrange, 1, xsize,
                                          xaxis_config, xaxis_mask, xaxis_team);
 
     if (rc != OSHMEM_SUCCESS) {
@@ -1944,7 +2092,7 @@ int mca_spml_ucx_team_split_2d(shmem_team_t parent_team, int xrange, const
     }
 
     /* Create y-team of my_pe */
-    rc = mca_spml_ucx_team_split_strided(parent_team, pe_x, xrange, yrange,
+    rc = mca_spml_ucx_team_split_strided(parent_team, pe_x, xrange, ysize,
                                          yaxis_config, yaxis_mask, yaxis_team);
     if (rc != OSHMEM_SUCCESS) {
         SPML_UCX_ERROR("mca_spml_ucx_team_split_strided failed (y-axis team creation)");
@@ -1958,13 +2106,114 @@ out_free_xaxis:
     return rc;
 }
 
-/* This routine is not implemented */
+/* Build SHMEM_TEAM_SHARED: the PEs that are on the same node as the calling
+ * PE. The team is local, no communication is needed, as every PE of a node
+ * computes the same set. pSync slot 0 is reserved on every PE for it (the
+ * teams of different nodes are disjoint, so they may share the slot). The
+ * set of node-local PEs must be a strided set to be representable. If it is
+ * not (unusual process placement), the team falls back to the calling PE
+ * alone, which is a valid, if smaller, shared memory domain. */
+int mca_spml_ucx_team_init_shared(shmem_team_t *team)
+{
+    mca_spml_ucx_team_t *shared;
+    int npes = oshmem_num_procs();
+    int me = oshmem_my_proc_id();
+    int first = -1;
+    int stride = 1;
+    int size = 0;
+    int last = -1;
+    int strided = 1;
+    int pe;
+
+    for (pe = 0; pe < npes; pe++) {
+        if (!oshmem_proc_on_local_node(pe)) {
+            continue;
+        }
+        if (first < 0) {
+            first = pe;
+        } else if (1 == size) {
+            stride = pe - first;
+        } else if ((pe - last) != stride) {
+            strided = 0;
+            break;
+        }
+        last = pe;
+        size++;
+    }
+
+    if (!strided || (first < 0) || ((me - first) % stride) ||
+        (me < first) || (me > last)) {
+        first = me;
+        stride = 1;
+        size = 1;
+    }
+
+    shared = (mca_spml_ucx_team_t *) calloc(1, sizeof(*shared));
+    if (OPAL_UNLIKELY(NULL == shared)) {
+        return OSHMEM_ERR_OUT_OF_RESOURCE;
+    }
+
+    shared->config = (mca_spml_ucx_team_config_t *) calloc(1, sizeof(*shared->config));
+    if (OPAL_UNLIKELY(NULL == shared->config)) {
+        free(shared);
+        return OSHMEM_ERR_OUT_OF_RESOURCE;
+    }
+
+    shared->start  = first;
+    shared->stride = stride;
+    shared->n_pes  = size;
+    shared->my_pe  = (me - first) / stride;
+    shared->slot   = 0;
+    shared->pSync  = mca_scoll_team_sync_pool;
+    shared->group  = oshmem_proc_group_create_nofail(first, stride, size);
+    *(volatile unsigned long *) mca_scoll_team_slot_map |= 1UL;
+
+    *team = (shmem_team_t) shared;
+    return OSHMEM_SUCCESS;
+}
+
+void mca_spml_ucx_team_fini_shared(shmem_team_t *team)
+{
+    mca_spml_ucx_team_t *shared = (mca_spml_ucx_team_t *) *team;
+
+    if (NULL == shared) {
+        return;
+    }
+
+    oshmem_proc_group_destroy(shared->group);
+    free(shared->config);
+    free(shared);
+    *team = SHMEM_TEAM_INVALID;
+}
+
 int mca_spml_ucx_team_destroy(shmem_team_t team)
 {
     mca_spml_ucx_team_t *ucx_team = (mca_spml_ucx_team_t *)team;
+    int rc;
 
-    SPML_UCX_VALIDATE_TEAM(team);
+    /* Non-member PEs hold SHMEM_TEAM_INVALID and may still call destroy */
+    if (team == SHMEM_TEAM_INVALID) {
+        return OSHMEM_SUCCESS;
+    }
 
+    if (team == SHMEM_TEAM_WORLD) {
+        SPML_UCX_ERROR("SHMEM_TEAM_WORLD cannot be destroyed");
+        return OSHMEM_ERROR;
+    }
+
+    if (team == SHMEM_TEAM_SHARED) {
+        SPML_UCX_ERROR("SHMEM_TEAM_SHARED cannot be destroyed");
+        return OSHMEM_ERROR;
+    }
+
+    /* No member may release the slot before every member is done with pSync */
+    rc = mca_spml_ucx_team_sync(team);
+    if (OPAL_UNLIKELY(OSHMEM_SUCCESS != rc)) {
+        return rc;
+    }
+
+    *(volatile unsigned long *)mca_scoll_team_slot_map &= ~(1UL << ucx_team->slot);
+    oshmem_proc_group_destroy(ucx_team->group);
     free(ucx_team->config);
     free(team);
 

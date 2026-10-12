@@ -97,7 +97,10 @@ shmem_internal_mutex_t shmem_internal_mutex_alloc = {{0}};
 shmem_ctx_t oshmem_ctx_default = NULL;
 
 shmem_team_t oshmem_team_shared = NULL;
-shmem_team_t oshmem_team_world  = NULL;
+/* SHMEM_TEAM_WORLD must differ from SHMEM_TEAM_INVALID (NULL), so that
+ * functions can report non-membership with SHMEM_TEAM_INVALID. */
+static int oshmem_team_world_obj = 0;
+shmem_team_t oshmem_team_world  = (shmem_team_t) &oshmem_team_world_obj;
 
 static int _shmem_init(int argc, char **argv, int requested, int *provided);
 
@@ -403,6 +406,12 @@ static int _shmem_init(int argc, char **argv, int requested, int *provided)
     }
 
     OPAL_TIMING_ENV_NEXT(timing, "mca_scoll_enable()");
+
+    /* SHMEM_TEAM_SHARED needs the pSync pool allocated by mca_scoll_enable() */
+    if (OSHMEM_SUCCESS != (ret = MCA_SPML_CALL(team_init_shared(&oshmem_team_shared)))) {
+        error = "creation of SHMEM_TEAM_SHARED failed";
+        goto error;
+    }
 
     (*provided) = oshmem_mpi_thread_provided;
 
