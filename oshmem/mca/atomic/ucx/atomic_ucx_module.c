@@ -283,6 +283,67 @@ static int mca_atomic_ucx_swap(shmem_ctx_t ctx,
 #endif
 }
 
+/*
+ * Nonblocking fetching atomic. The result is written directly to the user's
+ * fetch buffer, so the operation is only posted here. The request is released
+ * without waiting (as done for nonblocking put/get) and its completion is
+ * guaranteed by the worker flush in shmem_quiet/shmem_ctx_quiet.
+ */
+static inline
+int mca_atomic_ucx_fop_nb(shmem_ctx_t ctx,
+                          void *fetch,
+                          void *target,
+                          uint64_t value,
+                          size_t size,
+                          int pe,
+#if HAVE_DECL_UCP_ATOMIC_OP_NBX
+                          ucp_atomic_op_t op)
+#else
+                          ucp_atomic_fetch_op_t op)
+#endif
+{
+    ucs_status_ptr_t status_ptr;
+    spml_ucx_mkey_t *ucx_mkey;
+    uint64_t rva;
+    mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
+#if HAVE_DECL_UCP_ATOMIC_OP_NBX
+    ucp_request_param_t param = {
+        .op_attr_mask = UCP_OP_ATTR_FIELD_DATATYPE |
+                        UCP_OP_ATTR_FIELD_REPLY_BUFFER,
+        .datatype     = ucp_dt_make_contig(size),
+        .reply_buffer = fetch
+    };
+#endif
+
+    assert((8 == size) || (4 == size));
+    assert(NULL != fetch);
+
+    ucx_mkey = mca_spml_ucx_ctx_mkey_by_va(ctx, pe, target, (void *)&rva, mca_spml_self);
+    assert(NULL != ucx_mkey);
+#if HAVE_DECL_UCP_ATOMIC_OP_NBX
+    status_ptr = ucp_atomic_op_nbx(ucx_ctx->ucp_peers[pe].ucp_conn, op, &value, 1,
+                                   rva, ucx_mkey->rkey, &param);
+#else
+    status_ptr = ucp_atomic_fetch_nb(ucx_ctx->ucp_peers[pe].ucp_conn,
+                                     op, value, fetch, size,
+                                     rva, ucx_mkey->rkey,
+                                     opal_common_ucx_empty_complete_cb);
+#endif
+    if (OPAL_UNLIKELY(UCS_PTR_IS_ERR(status_ptr))) {
+        SPML_UCX_ERROR("nonblocking atomic failed: %s",
+                       ucs_status_string(UCS_PTR_STATUS(status_ptr)));
+        return OSHMEM_ERROR;
+    }
+
+    if (UCS_PTR_IS_PTR(status_ptr)) {
+        ucp_request_free(status_ptr);
+    }
+
+    mca_spml_ucx_remote_op_posted(ucx_ctx, pe);
+
+    return OSHMEM_SUCCESS;
+}
+
 static int mca_atomic_ucx_fadd_nb(shmem_ctx_t ctx,
                                void *fetch,
                                void *target,
@@ -291,7 +352,11 @@ static int mca_atomic_ucx_fadd_nb(shmem_ctx_t ctx,
                                size_t size,
                                int pe)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+#if HAVE_DECL_UCP_ATOMIC_OP_NBX
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, value, size, pe, UCP_ATOMIC_OP_ADD);
+#else
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, value, size, pe, UCP_ATOMIC_FETCH_OP_FADD);
+#endif
 }
 
 static int mca_atomic_ucx_fand_nb(shmem_ctx_t ctx,
@@ -302,7 +367,13 @@ static int mca_atomic_ucx_fand_nb(shmem_ctx_t ctx,
                                size_t size,
                                int pe)
 {
+#if HAVE_DECL_UCP_ATOMIC_OP_NBX
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, value, size, pe, UCP_ATOMIC_OP_AND);
+#elif HAVE_DECL_UCP_ATOMIC_FETCH_OP_FAND
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, value, size, pe, UCP_ATOMIC_FETCH_OP_FAND);
+#else
     return OSHMEM_ERR_NOT_IMPLEMENTED;
+#endif
 }
 
 static int mca_atomic_ucx_for_nb(shmem_ctx_t ctx,
@@ -313,7 +384,13 @@ static int mca_atomic_ucx_for_nb(shmem_ctx_t ctx,
                                size_t size,
                                int pe)
 {
+#if HAVE_DECL_UCP_ATOMIC_OP_NBX
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, value, size, pe, UCP_ATOMIC_OP_OR);
+#elif HAVE_DECL_UCP_ATOMIC_FETCH_OP_FOR
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, value, size, pe, UCP_ATOMIC_FETCH_OP_FOR);
+#else
     return OSHMEM_ERR_NOT_IMPLEMENTED;
+#endif
 }
 
 static int mca_atomic_ucx_fxor_nb(shmem_ctx_t ctx,
@@ -324,7 +401,13 @@ static int mca_atomic_ucx_fxor_nb(shmem_ctx_t ctx,
                                size_t size,
                                int pe)
 {
+#if HAVE_DECL_UCP_ATOMIC_OP_NBX
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, value, size, pe, UCP_ATOMIC_OP_XOR);
+#elif HAVE_DECL_UCP_ATOMIC_FETCH_OP_FXOR
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, value, size, pe, UCP_ATOMIC_FETCH_OP_FXOR);
+#else
     return OSHMEM_ERR_NOT_IMPLEMENTED;
+#endif
 }
 
 static int mca_atomic_ucx_swap_nb(shmem_ctx_t ctx,
@@ -335,9 +418,12 @@ static int mca_atomic_ucx_swap_nb(shmem_ctx_t ctx,
                                size_t size,
                                int pe)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+#if HAVE_DECL_UCP_ATOMIC_OP_NBX
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, value, size, pe, UCP_ATOMIC_OP_SWAP);
+#else
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, value, size, pe, UCP_ATOMIC_FETCH_OP_SWAP);
+#endif
 }
-
 
 static int mca_atomic_ucx_cswap_nb(shmem_ctx_t ctx,
                                    void *fetch,
@@ -348,7 +434,22 @@ static int mca_atomic_ucx_cswap_nb(shmem_ctx_t ctx,
                                    size_t size,
                                    int pe)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    /* UCX CSWAP reads the new value from the reply buffer and overwrites it
+       with the previous contents of target. */
+    if (8 == size) {
+        *(uint64_t *)fetch = value;
+    } else if (4 == size) {
+        *(uint32_t *)fetch = (uint32_t)value;
+    } else {
+        SPML_UCX_ERROR("[#%d] Type size must be 4 or 8 bytes.", oshmem_my_proc_id());
+        return OSHMEM_ERROR;
+    }
+
+#if HAVE_DECL_UCP_ATOMIC_OP_NBX
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, cond, size, pe, UCP_ATOMIC_OP_CSWAP);
+#else
+    return mca_atomic_ucx_fop_nb(ctx, fetch, target, cond, size, pe, UCP_ATOMIC_FETCH_OP_CSWAP);
+#endif
 }
 
 static int mca_atomic_ucx_set(shmem_ctx_t ctx,
