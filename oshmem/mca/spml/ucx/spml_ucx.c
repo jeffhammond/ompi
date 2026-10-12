@@ -1701,94 +1701,279 @@ int mca_spml_ucx_put_signal_nb(shmem_ctx_t ctx, void* dst_addr, size_t size,
     return mca_spml_ucx_signal(ctx, sig_addr, signal, sig_op, dst);
 }
 
-/* This routine is not implemented */
+/*
+ * Size in bytes of one element of the given SHMEM datatype, or 0 if the
+ * datatype is not supported by the wait/test routines.
+ */
+static inline size_t mca_spml_ucx_wait_elem_size(int datatype)
+{
+    switch (datatype) {
+    case SHMEM_SHORT:
+        return sizeof(short);
+    case SHMEM_USHORT:
+        return sizeof(unsigned short);
+    case SHMEM_INT:
+        return sizeof(int);
+    case SHMEM_UINT:
+        return sizeof(unsigned int);
+    case SHMEM_LONG:
+        return sizeof(long);
+    case SHMEM_ULONG:
+        return sizeof(unsigned long);
+    case SHMEM_LLONG:
+        return sizeof(long long);
+    case SHMEM_ULLONG:
+        return sizeof(unsigned long long);
+    case SHMEM_INT32_T:
+        return sizeof(int32_t);
+    case SHMEM_UINT32_T:
+        return sizeof(uint32_t);
+    case SHMEM_INT64_T:
+        return sizeof(int64_t);
+    case SHMEM_UINT64_T:
+        return sizeof(uint64_t);
+    case SHMEM_SIZE_T:
+        return sizeof(size_t);
+    case SHMEM_PTRDIFF_T:
+        return sizeof(ptrdiff_t);
+    default:
+        return 0;
+    }
+}
+
+/*
+ * Make one pass over the elements of ivars that are not excluded by status
+ * (a nonzero status entry excludes the element) and evaluate the comparison
+ * against cmp_values.  If vector is zero, cmp_values points to a single value
+ * used for all elements; otherwise element i is compared to cmp_values[i].
+ *
+ * Returns the number of elements that satisfy the comparison.  The number of
+ * elements that were eligible is stored in *n_eligible.  If indices is not
+ * NULL, the indices of the satisfying elements are stored there.  If
+ * stop_first is nonzero, the scan starts at element start and stops at the
+ * first satisfying element; otherwise start must be 0.
+ */
+static size_t mca_spml_ucx_wait_scan(void *ivars, int cmp, void *cmp_values,
+                                     int vector, size_t nelems,
+                                     const int *status, int datatype,
+                                     size_t *indices, int stop_first,
+                                     size_t start, size_t *n_eligible)
+{
+    size_t esize = mca_spml_ucx_wait_elem_size(datatype);
+    size_t nsat  = 0;
+    size_t i, k;
+    int sat;
+
+    *n_eligible = 0;
+
+    if (OPAL_UNLIKELY(0 == esize)) {
+        SPML_UCX_ERROR("Unsupported datatype for wait/test: %d", datatype);
+        return 0;
+    }
+
+    for (k = 0; k < nelems; k++) {
+        i = (start + k) % nelems;
+        if ((NULL != status) && (0 != status[i])) {
+            continue;
+        }
+
+        (*n_eligible)++;
+        sat = 0;
+        mca_spml_base_test((char*)ivars + i * esize, cmp,
+                           (char*)cmp_values + (vector ? i * esize : 0),
+                           datatype, &sat);
+        if (sat) {
+            if (NULL != indices) {
+                indices[nsat] = i;
+            }
+            nsat++;
+            if (stop_first) {
+                break;
+            }
+        }
+    }
+
+    return nsat;
+}
+
+static void mca_spml_ucx_wait_all_impl(void *ivars, int cmp, void *cmp_values,
+                                       int vector, size_t nelems,
+                                       const int *status, int datatype)
+{
+    size_t n_eligible;
+    size_t nsat;
+
+    for (;;) {
+        nsat = mca_spml_ucx_wait_scan(ivars, cmp, cmp_values, vector, nelems,
+                                      status, datatype, NULL, 0, 0,
+                                      &n_eligible);
+        if (nsat == n_eligible) {
+            return;
+        }
+        opal_progress();
+    }
+}
+
+/* Returns SIZE_MAX if there are no eligible elements */
+static size_t mca_spml_ucx_wait_any_impl(void *ivars, int cmp,
+                                         void *cmp_values, int vector,
+                                         size_t nelems, const int *status,
+                                         int datatype, int block)
+{
+    /*
+     * Rotate the starting element between calls so that repeated calls do not
+     * always report the same element when several are eligible.
+     */
+    static size_t next_start = 0;
+    size_t n_eligible;
+    size_t index = 0;
+    size_t start = next_start++;
+    size_t nsat;
+
+    for (;;) {
+        nsat = mca_spml_ucx_wait_scan(ivars, cmp, cmp_values, vector, nelems,
+                                      status, datatype, &index, 1,
+                                      start, &n_eligible);
+        if (0 == n_eligible) {
+            return SIZE_MAX;
+        }
+        if (nsat > 0) {
+            return index;
+        }
+        if (!block) {
+            return SIZE_MAX;
+        }
+        opal_progress();
+    }
+}
+
+/* Returns 0 if there are no eligible elements */
+static size_t mca_spml_ucx_wait_some_impl(void *ivars, int cmp,
+                                          void *cmp_values, int vector,
+                                          size_t nelems, size_t *indices,
+                                          const int *status, int datatype,
+                                          int block)
+{
+    size_t n_eligible;
+    size_t nsat;
+
+    for (;;) {
+        nsat = mca_spml_ucx_wait_scan(ivars, cmp, cmp_values, vector, nelems,
+                                      status, datatype, indices, 0, 0,
+                                      &n_eligible);
+        if ((0 == n_eligible) || (nsat > 0) || !block) {
+            return nsat;
+        }
+        opal_progress();
+    }
+}
+
+static int mca_spml_ucx_test_all_impl(void *ivars, int cmp, void *cmp_values,
+                                      int vector, size_t nelems,
+                                      const int *status, int datatype)
+{
+    size_t n_eligible;
+    size_t nsat;
+
+    nsat = mca_spml_ucx_wait_scan(ivars, cmp, cmp_values, vector, nelems,
+                                  status, datatype, NULL, 0, 0, &n_eligible);
+    if (nsat == n_eligible) {
+        return 1;
+    }
+
+    /* Allow progress so that repeated polling makes forward progress */
+    opal_progress();
+    return 0;
+}
+
 void mca_spml_ucx_wait_until_all(void *ivars, int cmp, void
         *cmp_value, size_t nelems, const int *status, int datatype)
 {
-    RUNTIME_SHMEM_NOT_IMPLEMENTED_API_ABORT();
+    mca_spml_ucx_wait_all_impl(ivars, cmp, cmp_value, 0, nelems, status,
+                               datatype);
 }
 
-/* This routine is not implemented */
 size_t mca_spml_ucx_wait_until_any(void *ivars, int cmp, void
         *cmp_value, size_t nelems, const int *status, int datatype)
 {
-    RUNTIME_SHMEM_NOT_IMPLEMENTED_API_ABORT_RET_SIZE_T();
+    return mca_spml_ucx_wait_any_impl(ivars, cmp, cmp_value, 0, nelems, status,
+                                      datatype, 1);
 }
 
-/* This routine is not implemented */
 size_t mca_spml_ucx_wait_until_some(void *ivars, int cmp, void
         *cmp_value, size_t nelems, size_t *indices, const int *status, int
         datatype)
 {
-    RUNTIME_SHMEM_NOT_IMPLEMENTED_API_ABORT_RET_SIZE_T();
+    return mca_spml_ucx_wait_some_impl(ivars, cmp, cmp_value, 0, nelems,
+                                       indices, status, datatype, 1);
 }
 
-/* This routine is not implemented */ 
 void mca_spml_ucx_wait_until_all_vector(void *ivars, int cmp, void
         *cmp_values, size_t nelems, const int *status, int datatype)
 {
-    RUNTIME_SHMEM_NOT_IMPLEMENTED_API_ABORT();
+    mca_spml_ucx_wait_all_impl(ivars, cmp, cmp_values, 1, nelems, status,
+                               datatype);
 }
 
-/* This routine is not implemented */
 size_t mca_spml_ucx_wait_until_any_vector(void *ivars, int cmp, void
-        *cmp_value, size_t nelems, const int *status, int datatype)
+        *cmp_values, size_t nelems, const int *status, int datatype)
 {
-    RUNTIME_SHMEM_NOT_IMPLEMENTED_API_ABORT_RET_SIZE_T();
+    return mca_spml_ucx_wait_any_impl(ivars, cmp, cmp_values, 1, nelems,
+                                      status, datatype, 1);
 }
 
-/* This routine is not implemented */
 size_t mca_spml_ucx_wait_until_some_vector(void *ivars, int cmp, void
-        *cmp_value, size_t nelems, size_t *indices, const int *status, int
+        *cmp_values, size_t nelems, size_t *indices, const int *status, int
         datatype)
 {
-    RUNTIME_SHMEM_NOT_IMPLEMENTED_API_ABORT_RET_SIZE_T();
+    return mca_spml_ucx_wait_some_impl(ivars, cmp, cmp_values, 1, nelems,
+                                       indices, status, datatype, 1);
 }
 
-/* This routine is not implemented */
 int mca_spml_ucx_test_all(void *ivars, int cmp, void *cmp_value,
         size_t nelems, const int *status, int datatype)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    return mca_spml_ucx_test_all_impl(ivars, cmp, cmp_value, 0, nelems, status,
+                                      datatype);
 }
 
-/* This routine is not implemented */
 size_t mca_spml_ucx_test_any(void *ivars, int cmp, void *cmp_value,
         size_t nelems, const int *status, int datatype)
 {
-    RUNTIME_SHMEM_NOT_IMPLEMENTED_API_ABORT_RET_SIZE_T();
+    return mca_spml_ucx_wait_any_impl(ivars, cmp, cmp_value, 0, nelems, status,
+                                      datatype, 0);
 }
 
-/* This routine is not implemented */
 size_t mca_spml_ucx_test_some(void *ivars, int cmp, void *cmp_value,
         size_t nelems, size_t *indices, const int *status, int datatype)
 {
-    RUNTIME_SHMEM_NOT_IMPLEMENTED_API_ABORT_RET_SIZE_T();
+    return mca_spml_ucx_wait_some_impl(ivars, cmp, cmp_value, 0, nelems,
+                                       indices, status, datatype, 0);
 }
 
-/* This routine is not implemented */
 int mca_spml_ucx_test_all_vector(void *ivars, int cmp, void *cmp_values,
                                  size_t nelems, const int *status,
                                  int datatype)
 {
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
+    return mca_spml_ucx_test_all_impl(ivars, cmp, cmp_values, 1, nelems,
+                                      status, datatype);
 }
 
-/* This routine is not implemented */
 size_t mca_spml_ucx_test_any_vector(void *ivars, int cmp,
                                     void *cmp_values, size_t nelems,
                                     const int *status, int datatype)
 {
-    RUNTIME_SHMEM_NOT_IMPLEMENTED_API_ABORT_RET_SIZE_T();
+    return mca_spml_ucx_wait_any_impl(ivars, cmp, cmp_values, 1, nelems,
+                                      status, datatype, 0);
 }
 
-/* This routine is not implemented */
 size_t mca_spml_ucx_test_some_vector(void *ivars, int cmp,
                                      void *cmp_values, size_t nelems,
                                      size_t *indices, const int *status,
                                      int datatype)
 {
-    RUNTIME_SHMEM_NOT_IMPLEMENTED_API_ABORT_RET_SIZE_T();
+    return mca_spml_ucx_wait_some_impl(ivars, cmp, cmp_values, 1, nelems,
+                                       indices, status, datatype, 0);
 }
 
 /* This routine is not implemented */
