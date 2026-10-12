@@ -74,8 +74,8 @@ int shmem_team_get_config(shmem_team_t team, long config_mask, shmem_team_config
 
     RUNTIME_CHECK_INIT();
 
+    /* A nonzero return value is reported to the caller, not fatal */
     rc = MCA_SPML_CALL(team_get_config(team, config_mask, config));
-    RUNTIME_CHECK_RC(rc);
 
     return rc;
 }
@@ -133,8 +133,8 @@ int shmem_ctx_get_team(shmem_ctx_t ctx, shmem_team_t *team)
 
     RUNTIME_CHECK_INIT();
 
+    /* A nonzero return value is reported to the caller, not fatal */
     rc = MCA_SPML_CALL(team_get(ctx, team));
-    RUNTIME_CHECK_RC(rc);
 
     return rc;
 }
@@ -145,8 +145,8 @@ int shmem_team_create_ctx(shmem_team_t team, long options, shmem_ctx_t *ctx)
 
     RUNTIME_CHECK_INIT();
 
+    /* A nonzero return value is reported to the caller, not fatal */
     rc = MCA_SPML_CALL(team_create_ctx(team, options, ctx));
-    RUNTIME_CHECK_RC(rc);
 
     return rc;
 }
