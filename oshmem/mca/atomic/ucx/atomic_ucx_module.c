@@ -357,11 +357,12 @@ static int mca_atomic_ucx_set(shmem_ctx_t ctx,
                               size_t size,
                               int pe)
 {
-#if HAVE_DECL_UCP_ATOMIC_OP_NBX
-    return mca_atomic_ucx_op(ctx, target, value, size, pe, UCP_ATOMIC_OP_SWAP);
-#else
-    return OSHMEM_ERR_NOT_IMPLEMENTED;
-#endif
+    uint64_t prev;
+
+    /* UCX has no non-fetching SWAP: the operation requires a reply buffer
+     * (a "post" SWAP aborts inside UCP). Perform a blocking swap and discard
+     * the previous value. */
+    return mca_atomic_ucx_swap(ctx, target, &prev, value, size, pe);
 }
 
 mca_atomic_base_module_t *
