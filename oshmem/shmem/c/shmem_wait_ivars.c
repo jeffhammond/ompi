@@ -161,7 +161,7 @@
     }
 
 #define SHMEM_TYPE_WAIT_UNTIL_ANY_VECTOR(type_name, type, code, prefix)    \
-    size_t prefix##type_name##_wait_until_any_vector(volatile type *ivars, size_t nelems, const int *status, int cmp, type *values)   \
+    size_t prefix##type_name##_wait_until_any_vector(volatile type *ivars, size_t nelems, const int *status, int cmp, const type *values)   \
     {                                                               \
         RUNTIME_CHECK_INIT();                                       \
                                                                     \
@@ -173,7 +173,7 @@
     }
 
 #define SHMEM_TYPE_WAIT_UNTIL_SOME_VECTOR(type_name, type, code, prefix)    \
-    size_t prefix##type_name##_wait_until_some_vector(volatile type *ivars, size_t nelems, size_t *indices, const int *status, int cmp, type *values)   \
+    size_t prefix##type_name##_wait_until_some_vector(volatile type *ivars, size_t nelems, size_t *indices, const int *status, int cmp, const type *values)   \
     {                                                               \
         RUNTIME_CHECK_INIT();                                       \
                                                                     \
@@ -186,7 +186,7 @@
 
 
 #define SHMEM_TYPE_WAIT_UNTIL_ALL_VECTOR(type_name, type, code, prefix)    \
-    void prefix##type_name##_wait_until_all_vector(volatile type *ivars, size_t nelems, const int *status, int cmp, type *values)   \
+    void prefix##type_name##_wait_until_all_vector(volatile type *ivars, size_t nelems, const int *status, int cmp, const type *values)   \
     {                                                               \
         MCA_SPML_CALL(wait_until_all_vector(                        \
             (void*)ivars,                                           \
